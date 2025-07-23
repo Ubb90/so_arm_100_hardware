@@ -50,6 +50,7 @@ private:
   // Position command and state storage for all joints
   std::vector<double> position_commands_;
   std::vector<double> position_states_;
+  std::vector<int> ignored_servos_{}; // Servos to ignore in feedback
 
   // Keep these until we fully transition to calibration
   std::vector<int> zero_positions_{2048, 2048, 2048, 2048, 2048, 2048};  // Center positions

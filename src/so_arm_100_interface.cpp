@@ -81,7 +81,7 @@ CallbackReturn SOARM100Interface::on_activate(const rclcpp_lifecycle::State & /*
     if (use_serial_) {
         if(!st3215_.begin(serial_baudrate_, serial_port_.c_str())) {
             RCLCPP_ERROR(rclcpp::get_logger("SOARM100Interface"), "Failed to initialize motors");
-            return CallbackReturn::ERROR;
+            // return CallbackReturn::ERROR;
         }
 
         // Initialize each servo
@@ -90,16 +90,18 @@ CallbackReturn SOARM100Interface::on_activate(const rclcpp_lifecycle::State & /*
             
             // First ping the servo
             if (st3215_.Ping(servo_id) == -1) {
-                RCLCPP_ERROR(rclcpp::get_logger("SOARM100Interface"), 
+                RCLCPP_WARN(rclcpp::get_logger("SOARM100Interface"), 
                             "No response from servo %d during initialization", servo_id);
-                return CallbackReturn::ERROR;
+                ignored_servos_.push_back(servo_id);  // Add to ignored list
+                continue;  // Skip this servo
+                // return CallbackReturn::ERROR;
             }
             
             // Set to position control mode
             if (!st3215_.Mode(servo_id, 0)) {
-                RCLCPP_ERROR(rclcpp::get_logger("SOARM100Interface"), 
+                RCLCPP_WARN(rclcpp::get_logger("SOARM100Interface"), 
                             "Failed to set mode for servo %d", servo_id);
-                return CallbackReturn::ERROR;
+                // return CallbackReturn::ERROR;
             }
 
             // Read initial position and set command to match
@@ -114,9 +116,15 @@ CallbackReturn SOARM100Interface::on_activate(const rclcpp_lifecycle::State & /*
             
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        
-        RCLCPP_INFO(rclcpp::get_logger("SOARM100Interface"), 
+        if (ignored_servos_.size() == info_.joints.size()) {
+            RCLCPP_ERROR(rclcpp::get_logger("SOARM100Interface"), 
+                        "All servos are ignored");
+            return CallbackReturn::ERROR;
+        }
+        else{
+            RCLCPP_INFO(rclcpp::get_logger("SOARM100Interface"), 
                     "Serial communication initialized on %s", serial_port_.c_str());
+        }
     }
 
     node_ = rclcpp::Node::make_shared("so_arm_100_driver");
@@ -167,6 +175,11 @@ CallbackReturn SOARM100Interface::on_deactivate(const rclcpp_lifecycle::State &)
     if (use_serial_) {
         for (size_t i = 0; i < info_.joints.size(); ++i) {
             uint8_t servo_id = static_cast<uint8_t>(i + 1);
+            if (std::find(ignored_servos_.begin(), ignored_servos_.end(), servo_id) != ignored_servos_.end()) {
+                RCLCPP_DEBUG(rclcpp::get_logger("SOARM100Interface"), 
+                            "Skipping servo %d as it is in the ignored list", servo_id);
+                continue;  // Skip ignored servos
+            }
             st3215_.EnableTorque(servo_id, 0);
         }
     }
@@ -186,6 +199,13 @@ hardware_interface::return_type SOARM100Interface::write(const rclcpp::Time & ti
     if (use_serial_ && torque_enabled_) {  // Only write if torque is enabled
         for (size_t i = 0; i < info_.joints.size(); ++i) {
             uint8_t servo_id = static_cast<uint8_t>(i + 1);
+
+            if (std::find(ignored_servos_.begin(), ignored_servos_.end(), servo_id) != ignored_servos_.end()) {
+                RCLCPP_DEBUG(rclcpp::get_logger("SOARM100Interface"), 
+                            "Skipping servo %d as it is in the ignored list", servo_id);
+                continue;  // Skip ignored servos
+
+            }
             // Convert from radians (-π to π) to servo ticks (0-4095)
             int joint_pos_cmd = radians_to_ticks(position_commands_[i], i);
             
@@ -221,6 +241,12 @@ hardware_interface::return_type SOARM100Interface::read(const rclcpp::Time & tim
     if (use_serial_) {
         for (size_t i = 0; i < info_.joints.size(); ++i) {
             uint8_t servo_id = static_cast<uint8_t>(i + 1);
+            if (std::find(ignored_servos_.begin(), ignored_servos_.end(), servo_id) != ignored_servos_.end())
+            {
+                RCLCPP_DEBUG(rclcpp::get_logger("SOARM100Interface"), 
+                            "Skipping servo %d as it is in the ignored list", servo_id);
+                continue;  // Skip ignored servos
+            }
             
             // Add small delay between reads
             std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Increased delay
@@ -377,7 +403,11 @@ void SOARM100Interface::set_torque_enable(bool enable)
         // First set all servos
         for (size_t i = 0; i < info_.joints.size(); ++i) {
             uint8_t servo_id = static_cast<uint8_t>(i + 1);
-            
+            if (std::find(ignored_servos_.begin(), ignored_servos_.end(), servo_id) != ignored_servos_.end()) {
+                RCLCPP_DEBUG(rclcpp::get_logger("SOARM100Interface"), 
+                            "Skipping servo %d as it is in the ignored list", servo_id);
+                continue;  // Skip ignored servos
+            }
             if (!enable) {
                 // When disabling:
                 // 1. Set to idle mode first
