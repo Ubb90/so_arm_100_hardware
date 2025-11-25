@@ -45,6 +45,9 @@ CallbackReturn SOARM100Interface::on_init(const hardware_interface::HardwareInfo
     
     serial_baudrate_ = hardware_info.hardware_parameters.count("serial_baudrate") ?
         std::stoi(hardware_info.hardware_parameters.at("serial_baudrate")) : 1000000;
+    
+    joint_state_topic_ = hardware_info.hardware_parameters.count("joint_state_topic") ?
+        hardware_info.hardware_parameters.at("joint_state_topic") : "joint_states";
 
     size_t num_joints = info_.joints.size();
     position_commands_.resize(num_joints, 0.0);
@@ -131,6 +134,10 @@ CallbackReturn SOARM100Interface::on_activate(const rclcpp_lifecycle::State & /*
     feedback_subscriber_ = node_->create_subscription<sensor_msgs::msg::JointState>(
         "feedback", 10, std::bind(&SOARM100Interface::feedback_callback, this, std::placeholders::_1));
     command_publisher_ = node_->create_publisher<sensor_msgs::msg::JointState>("command", 10);
+    state_publisher_ = node_->create_publisher<sensor_msgs::msg::JointState>(joint_state_topic_, 10);
+    
+    RCLCPP_INFO(rclcpp::get_logger("SOARM100Interface"), 
+               "Joint state publisher created on topic: %s", joint_state_topic_.c_str());
 
     // Add services
     calib_service_ = node_->create_service<std_srvs::srv::Trigger>(
@@ -299,6 +306,19 @@ hardware_interface::return_type SOARM100Interface::read(const rclcpp::Time & tim
                 }
             }
         }
+    }
+
+    // Publish current joint states
+    if (state_publisher_) {
+        sensor_msgs::msg::JointState state_msg;
+        state_msg.header.stamp = node_->now();
+        
+        for (size_t i = 0; i < info_.joints.size(); ++i) {
+            state_msg.name.push_back(info_.joints[i].name);
+            state_msg.position.push_back(position_states_[i]);
+        }
+        
+        state_publisher_->publish(state_msg);
     }
 
     return hardware_interface::return_type::OK;

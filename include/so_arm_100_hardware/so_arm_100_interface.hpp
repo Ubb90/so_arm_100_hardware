@@ -69,6 +69,7 @@ private:
   bool use_serial_;
   std::string serial_port_;
   int serial_baudrate_;
+  std::string joint_state_topic_;
 
   // Serial communication
   int SerialPort;
@@ -80,6 +81,7 @@ private:
   // ROS interfaces
   rclcpp::Node::SharedPtr node_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr command_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_publisher_;
   rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr feedback_subscriber_;
 
   std::shared_ptr<rclcpp::executors::SingleThreadedExecutor> executor_;
