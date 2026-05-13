@@ -154,16 +154,16 @@ CallbackReturn SOARM100Interface::on_activate(const rclcpp_lifecycle::State & /*
     executor_->add_node(node_);
     spin_thread_ = std::thread([this]() { executor_->spin(); });
 
-    // Load calibration
+    // Load calibration — prefer launch parameter, fall back to ~/.config/letrack/calibration.yaml
+    std::string home = std::getenv("HOME") ? std::getenv("HOME") : "";
+    std::string default_calib = home + "/.config/letrack/calibration.yaml";
     std::string calib_file = info_.hardware_parameters.count("calibration_file") ?
-        info_.hardware_parameters.at("calibration_file") : "";
+        info_.hardware_parameters.at("calibration_file") : default_calib;
     RCLCPP_INFO(rclcpp::get_logger("SOARM100Interface"), 
                "Loading calibration file: %s", calib_file.c_str());
-    if (!calib_file.empty()) {
-        if (!load_calibration(calib_file)) {
-            RCLCPP_WARN(rclcpp::get_logger("SOARM100Interface"), 
-                       "Failed to load calibration file: %s", calib_file.c_str());
-        }
+    if (!load_calibration(calib_file)) {
+        RCLCPP_WARN(rclcpp::get_logger("SOARM100Interface"), 
+                   "Failed to load calibration file: %s", calib_file.c_str());
     }
 
     RCLCPP_INFO(rclcpp::get_logger("SOARM100Interface"), "Hardware interface activated");
@@ -340,10 +340,9 @@ double SOARM100Interface::ticks_to_radians(int ticks, size_t servo_idx)
     
     if (joint_calibration_.count(joint_name) > 0) {
         const auto& calib = joint_calibration_[joint_name];
-        // Convert to normalized position first (0 to 1)
-        double normalized = (double)(ticks - calib.min_ticks) / calib.range_ticks;
-        // Then convert to radians (-π to π)
-        return (normalized * 2.0 - 1.0) * M_PI;
+        // center_ticks is the hardware zero (maps to 0 rad).
+        // STS3215 has 4096 ticks per full revolution, so scale directly.
+        return (ticks - calib.center_ticks) * 2.0 * M_PI / 4096.0;
     }
     
     // Fallback to default calibration
@@ -357,10 +356,8 @@ int SOARM100Interface::radians_to_ticks(double radians, size_t servo_idx)
     
     if (joint_calibration_.count(joint_name) > 0) {
         const auto& calib = joint_calibration_[joint_name];
-        // Convert from radians (-π to π) to normalized position (0 to 1)
-        double normalized = (radians / M_PI + 1.0) / 2.0;
-        // Then convert to ticks
-        return calib.min_ticks + (int)(normalized * calib.range_ticks);
+        // Inverse of ticks_to_radians: center_ticks is 0 rad.
+        return calib.center_ticks + (int)(radians * 4096.0 / (2.0 * M_PI));
     }
     
     // Fallback to default calibration
@@ -430,8 +427,10 @@ void SOARM100Interface::set_torque_enable(bool enable)
             }
             if (!enable) {
                 // When disabling:
-                // 1. Set to idle mode first
-                st3215_.Mode(servo_id, 2);  // Mode 2 = idle
+                // 1. Switch to wheel/velocity mode so the position PID is off.
+                //    Mode 1 = motor/wheel mode: no position setpoint is held,
+                //    which makes the joint much more compliant to manual movement.
+                st3215_.Mode(servo_id, 1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 
                 // 2. Disable torque
